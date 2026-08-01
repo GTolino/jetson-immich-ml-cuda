@@ -1,0 +1,35 @@
+# Immich machine-learning, running ALONE on the Jetson.
+#
+# This is a remote-ML deployment: the Immich server, database and web UI live on
+# another host (a Raspberry Pi here) and reach this container over the LAN. The
+# server's own compose keeps its `immich-machine-learning` service commented out
+# and points its ML URL at this box instead:
+#
+#     http://<jetson-lan-ip>:3003
+#
+# If you instead run the whole Immich stack on the Jetson, take the service block
+# below and drop it into that compose file in place of the upstream ML service.
+
+name: immich
+
+services:
+  immich-machine-learning:
+    container_name: immich_machine_learning
+    image: immich-machine-learning:cuda-tegra-v3.0.3
+    # Required. Without the NVIDIA runtime the container gets no libcuda.so.1
+    # and ONNX Runtime falls back to CPU without saying so.
+    runtime: nvidia
+    ports:
+      # Bound on all interfaces so the Immich server can reach it across the LAN.
+      # Restrict to a specific interface if this host is not on a trusted network.
+      - "3003:3003"
+    volumes:
+      # Downloaded CLIP and face-recognition models. Keep it across rebuilds --
+      # losing it means re-downloading several GB on the next model load.
+      - model-cache:/cache
+    restart: always
+    healthcheck:
+      disable: false
+
+volumes:
+  model-cache:

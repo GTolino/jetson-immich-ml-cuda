@@ -1,0 +1,16 @@
+# build artifacts — the wheel is ~70MB, publish it as a release asset, not in git
+*.whl
+
+# collected NVIDIA runtime libraries — several hundred MB, and NVIDIA's to
+# distribute, not ours. Regenerate with scripts/collect-cuda-libs.sh
+cuda-libs.tar
+
+# local overrides
+.env
+compose.override.yml
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+.DS_Store

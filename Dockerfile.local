@@ -1,0 +1,73 @@
+# Immich machine-learning with CUDA on Jetson -- the NO-BUILDER route.
+#
+# Identical result to `Dockerfile`, different sources for the same two inputs:
+#
+#                     Dockerfile (proven)          Dockerfile.local (this file)
+#   CUDA/cuDNN libs   COPY --from= 26 GB builder   your host's JetPack, via
+#                                                  scripts/collect-cuda-libs.sh
+#   the wheel         COPY --from= 26 GB builder   downloaded from Releases
+#
+# Use this one if you did NOT build the wheel yourself. It needs no builder
+# image, so it turns a 5-9 hour job into a two-minute one.
+#
+# Verified end to end on the reference configuration: passes all six checks in
+# scripts/verify.sh, including a convolution through cuDNN, with results identical
+# to the `Dockerfile` route. What it has NOT had is a long production run -- that
+# is `Dockerfile`. Run verify.sh regardless; it is two minutes and this stack
+# fails silently.
+#
+# Prepare the build context first:
+#     ./scripts/collect-cuda-libs.sh          # writes cuda-libs.tar
+#     cp ~/Downloads/onnxruntime_gpu-*.whl .  # from Releases
+#     docker build -f Dockerfile.local -t immich-machine-learning:cuda-tegra-v3.0.3 .
+
+ARG IMMICH_VERSION=v3.0.3
+
+# ---------------------------------------------------------------- stage 1
+# `ADD` auto-extracts a tar, so this lands the libraries at /lib/ in an image
+# with nothing else in it. FROM scratch costs zero bytes and zero download.
+FROM scratch AS cuda
+ADD cuda-libs.tar /
+
+# ---------------------------------------------------------------- stage 2
+FROM ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION}
+
+# --- CUDA userspace -----------------------------------------------------
+# The container runtime injects only the DRIVER (libcuda.so.1) via drivers.csv.
+# Everything here is userspace and must live in the image. The stub-library and
+# dangling-symlink traps are handled by the globs in collect-cuda-libs.sh.
+COPY --from=cuda /lib/ /usr/local/cuda/lib64/
+
+# Second path is where the NVIDIA runtime drops the host driver on JetPack 6.
+# (JetPack 5 used /usr/lib/aarch64-linux-gnu/tegra -- adjust if you are on L4T 35.x.)
+RUN printf '/usr/local/cuda/lib64\n/usr/lib/aarch64-linux-gnu/nvidia\n' \
+      > /etc/ld.so.conf.d/cuda.conf \
+ && ldconfig
+
+# --- swap the CPU onnxruntime for the CUDA wheel -------------------------
+# Both distributions install the SAME `site-packages/onnxruntime/` directory,
+# so this is a replacement, not a coexistence. Installing over the top would
+# leave orphaned CPU files and two .dist-info directories claiming ownership.
+#
+# Immich's venv is uv-managed and ships no pip; ensurepip unpacks the copy
+# bundled in Python's stdlib. Always address the interpreter by full path --
+# a login shell rebuilds PATH and loses /opt/venv/bin.
+#
+# The `&&` chain matters: create-and-delete inside ONE instruction keeps the
+# wheel and pip cache out of every layer. Split across two RUNs, `rm` only
+# writes a whiteout and you ship both anyway.
+COPY onnxruntime_gpu-*.whl /tmp/
+RUN /opt/venv/bin/python -m ensurepip \
+ && /opt/venv/bin/python -m pip uninstall -y onnxruntime \
+ && /opt/venv/bin/python -m pip install --no-deps /tmp/onnxruntime_gpu-*.whl \
+ && rm -rf /tmp/*.whl /root/.cache/pip
+
+# --- runtime switches ----------------------------------------------------
+# NVIDIA_* are required: the stock Immich image does not set them, and without
+# them the container runtime injects nothing at all -- silently.
+ENV DEVICE=cuda
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu/nvidia
+
+# ENTRYPOINT and CMD are inherited (`tini -- python -m immich_ml`). Do not restate.
