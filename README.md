@@ -314,9 +314,6 @@ at runtime** — and a fallback turns that quiet failure into an apparent succes
 
 ## Known limitations
 
-- **No published image**, for the licensing reason above.
-- **No clean CPU baseline.** The speedup is unambiguous but was never measured against
-  a controlled before-run, so there's no honest ratio to quote.
 - **Memory on an 8 GB board is untested here.** If you also run a resident LLM, that's
   three workloads and a CUDA context each sharing one pool.
 - **TensorRT isn't shipped.** The wheel builds
